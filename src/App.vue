@@ -31,7 +31,7 @@ function extractIdRange(input: string): number[] {
 export default defineComponent({
   data() {
     return {
-      roomId: undefined as number|undefined,
+      roomId: '' as number|string,
       idRange: '',
       messages: [] as Message[],
       users: [] as UserContainer[],
@@ -43,6 +43,20 @@ export default defineComponent({
       this.fetching = true
       try {
         const [first, last] = extractIdRange(this.idRange)
+        console.log("'" + this.roomId + "'")
+        const roomId = (typeof this.roomId === "string") ? undefined : this.roomId
+        console.log(new SearchRequests(
+          {
+            sole: first,
+            first: first-1,
+            last: last+1,
+            roomId: roomId || 0,
+          },
+          [
+            new SearchRequest(RequestType.message, "*", (first === last ? "id = @sole" : "id > @first AND id < @last") + (roomId ? " AND contentId = @roomId" : ""), "id"),
+            new SearchRequest(RequestType.user, "*", `id ${first === last ? "=" : "IN"} @message.createUserId`)
+          ]
+        ))
         const resp = await api.request<{
           message: Message[],
           user: User[]
@@ -50,10 +64,11 @@ export default defineComponent({
           {
             sole: first,
             first: first-1,
-            last: last+1
+            last: last+1,
+            roomId,
           },
           [
-            new SearchRequest(RequestType.message, "*", first === last ? "id = @sole" : "id > @first AND id < @last", "id"),
+            new SearchRequest(RequestType.message, "*", (first === last ? "id = @sole" : "id > @first AND id < @last") + (roomId ? " AND contentId = @roomId" : ""), "id"),
             new SearchRequest(RequestType.user, "*", `id ${first === last ? "=" : "IN"} @message.createUserId`)
           ]
         ))
@@ -94,25 +109,28 @@ export default defineComponent({
   <section class="section">
     <div class="container">
       <h1 class="title">ContentAPI-Objection.lol Converter</h1>
-      <div>
+      <form @submit.prevent="pullMessages">
         <div class="field">
           <label for="room-id" class="label">Room ID</label>
           <div class="control">
             <input type="number" id="room-id" class="input"
-              placeholder="???" v-model="roomId">
+              placeholder="???" v-model.number="roomId">
           </div>
         </div>
         <div class="field">
           <label for="id-range" class="label">ID Range</label>
           <div class="control">
             <input type="text" id="id-range" class="input"
-              placeholder="???-???" v-model="idRange">
+              placeholder="???-???" v-model="idRange"
+              required>
           </div>
         </div>
         <div class="field">
-          <button :class="`button is-primary ${fetching ? 'is-loading' : ''}`" @click="pullMessages">Pull</button>
+          <button :class="`button is-primary ${fetching ? 'is-loading' : ''}`">
+            Pull
+          </button>
         </div>
-      </div>
+      </form>
       <template v-if="messages.length">
         <h2 class="is-size-4">Users</h2>
         <div class="box" v-for="user in users" :key="user.user.id"
@@ -136,8 +154,11 @@ export default defineComponent({
             </figure>
           </div>
           <div class="field">
-            <label class="label">Censored Name</label>
+            <label class="label" :for="`censored-name-${user.user.id}`">
+              Censored Name
+            </label>
             <input type="text" class="input"
+              :id="`censored-name-${user.user.id}`"
               v-model.lazy="user.metadata.censoredName">
           </div>
         </div>
