@@ -13,20 +13,29 @@ class UserContainer {
   public user: User
   public metadata: {
     characterId: number,
-    censoredName: string
+    censoredName: string,
+    useNicknames: boolean,
   }
 
   constructor(user: User) {
     this.user = user
     this.metadata = {
       characterId: 1,
-      censoredName: ""
+      censoredName: "",
+      useNicknames: false,
     }
   }
 
   poseId(): number {
     return (characters.find(c => c.id === this.metadata.characterId)?.pose) || 1
   }
+}
+
+function nameResolution(msg: Message, user: UserContainer|undefined): string {
+  return (user?.metadata.useNicknames ? msg.values.n : undefined) || 
+    user?.metadata.censoredName ||
+    user?.user.username ||
+    msg.createUserId.toString()
 }
 
 function extractIdRange(input: string): number[] {
@@ -80,7 +89,7 @@ function generateEntries(): AttorneyEntry[] {
     poseId: user?.poseId() || 0,
     pairPoseId: null,
     bubbleType: 0,
-    username: user?.user.username || "",
+    username: nameResolution(msg, user) || "",
     mergeNext: false,
     doNotTalk: false,
     goNext: false,
@@ -279,6 +288,13 @@ function objectionLolIcon(id: number): string {
             <input type="text" class="input" :id="`censored-name-${user.user.id}`"
               v-model.lazy="user.metadata.censoredName">
           </div>
+          <div class="field">
+            <label class="label" :for="`use-nicknames-${user.user.id}`">
+              <input type="checkbox" :id="`use-nicknames-${user.user.id}`"
+                v-model="user.metadata.useNicknames">
+              Use Nicknames
+            </label>
+          </div>
         </div>
         <h2 class="is-size-4">Pulled Messages</h2>
         <table class="table is-fullwidth is-bordered">
@@ -294,10 +310,7 @@ function objectionLolIcon(id: number): string {
               <td>{{ msg.id }}</td>
               <td>
                 <a :href="`#user-${msg.createUserId}`">
-                  {{
-                    user?.metadata.censoredName || user?.user.username
-                      || msg.createUserId
-                  }}
+                  {{ nameResolution(msg, user) }}
                 </a>
               </td>
               <td>{{ msg.text }}</td>
