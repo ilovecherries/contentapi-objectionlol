@@ -1,18 +1,31 @@
-<script lang="ts">
-import { defineComponent, ref } from 'vue';
+<script setup lang="ts">
+import { computed, defineComponent, ref } from 'vue'
 import { ContentAPI } from "contentapi-ts-bindings/dist/Helpers"
 import type { User, Message } from "contentapi-ts-bindings/dist/Views"
-import {RequestType} from "contentapi-ts-bindings/dist/Search/RequestType"
+import { RequestType } from "contentapi-ts-bindings/dist/Search/RequestType"
 import { SearchRequests, SearchRequest } from "contentapi-ts-bindings/dist/Search/SearchRequests"
-import { characters } from './characters';
+import type { AttorneyEntry, AttorneyScene } from "./characters"
+import { characters } from './characters'
 
 const api = new ContentAPI("qcs.shsbs.xyz")
 
-type UserContainer = {
-  user: User,
-  metadata: {
+class UserContainer {
+  public user: User
+  public metadata: {
     characterId: number,
     censoredName: string
+  }
+
+  constructor(user: User) {
+    this.user = user
+    this.metadata = {
+      characterId: 1,
+      censoredName: ""
+    }
+  }
+
+  poseId(): number {
+    return (characters.find(c => c.id === this.metadata.characterId)?.pose) || 1
   }
 }
 
@@ -28,81 +41,120 @@ function extractIdRange(input: string): number[] {
   return range
 }
 
-export default defineComponent({
-  data() {
-    return {
-      roomId: '' as number|string,
-      idRange: '',
-      messages: [] as Message[],
-      users: [] as UserContainer[],
-      fetching: false,
-    }
-  },
-  methods: {
-    async pullMessages() {
-      this.fetching = true
-      try {
-        const [first, last] = extractIdRange(this.idRange)
-        console.log("'" + this.roomId + "'")
-        const roomId = (typeof this.roomId === "string") ? undefined : this.roomId
-        console.log(new SearchRequests(
-          {
-            sole: first,
-            first: first-1,
-            last: last+1,
-            roomId: roomId || 0,
-          },
-          [
-            new SearchRequest(RequestType.message, "*", (first === last ? "id = @sole" : "id > @first AND id < @last") + (roomId ? " AND contentId = @roomId" : ""), "id"),
-            new SearchRequest(RequestType.user, "*", `id ${first === last ? "=" : "IN"} @message.createUserId`)
-          ]
-        ))
-        const resp = await api.request<{
-          message: Message[],
-          user: User[]
-        }>(new SearchRequests(
-          {
-            sole: first,
-            first: first-1,
-            last: last+1,
-            roomId,
-          },
-          [
-            new SearchRequest(RequestType.message, "*", (first === last ? "id = @sole" : "id > @first AND id < @last") + (roomId ? " AND contentId = @roomId" : ""), "id"),
-            new SearchRequest(RequestType.user, "*", `id ${first === last ? "=" : "IN"} @message.createUserId`)
-          ]
-        ))
-        this.messages = resp.objects.message
-        this.users = resp.objects.user.map(u => ({
-          user: u,
-          metadata: {
-            characterId: 1,
-            censoredName: ""
-          }
-        } as UserContainer))
-      } catch (e) {
-        console.error(e)
-      } finally {
-        this.fetching = false
-      }
-    },
-    objectionLolIcon(id: number): string {
-      return `https://objection.lol/images/characters/${id}/icon.png`
-    }
+const roomId = ref<number | string>('')
+const idRange = ref('')
+const messages = ref<Message[]>([])
+const users = ref<UserContainer[]>([])
+const fetching = ref(false)
 
-  },
-  computed: {
-    characters() {
-      return characters
-    },
-    associatedMessages(): [Message, UserContainer|undefined][] {
-      return this.messages.map(msg => {
-        const user = this.users.find(u => u.user.id === msg.createUserId)
-        return [msg, user]
-      })
-    }
-  }
+const associatedMessages = computed<[Message, UserContainer | undefined][]>(() => {
+  return messages.value.map(msg => {
+    const user = users.value.find(u => u.user.id === msg.createUserId)
+    return [msg, user]
+  })
 })
+
+function download(filename, text) {
+  var element = document.createElement('a');
+  element.setAttribute('href', 'data:text/plain;charset=utf-8,' + encodeURIComponent(text));
+  element.setAttribute('download', filename);
+
+  element.style.display = 'none';
+  document.body.appendChild(element);
+
+  element.click();
+
+  document.body.removeChild(element);
+}
+
+function generateEntries(): AttorneyEntry[] {
+  return associatedMessages.value.map(([msg, user], i): AttorneyEntry => ({
+    id: i === 0 ? -1 : 0,
+    iid: i + 1,
+    text: msg.text,
+    poseId: user?.poseId() || 0,
+    pairPoseId: null,
+    bubbleType: 0,
+    username: user?.user.username || "",
+    mergeNext: false,
+    doNotTalk: false,
+    goNext: false,
+    poseAnimation: true,
+    flipped: null,
+    frameActions: [],
+    frameFades: [],
+    characterId: null,
+    popupId: null,
+    transition: null
+  }))
+}
+
+function exportEntries() {
+  const entries = generateEntries()
+  try {
+    const data: AttorneyScene = {
+      type: 'scene',
+      options: {
+        chatbox: 0,
+        textSpeed: 35,
+        textBlipFrequency: 64,
+        autoplaySpeed: 500,
+        continueSoundUrl: ''
+      },
+      groups: [{
+        iid: 1,
+        name: "Main",
+        type: "n",
+        frames: entries
+      }],
+      courtRecord: {
+        evidence: [],
+        profiles: []
+      },
+      aliases: [],
+      pairs: [],
+      version: 4
+    }
+    const jsonData = JSON.stringify(data).replace(/[^\x00-\x7F]/g, "")
+    const b64data = btoa(jsonData)
+    download("SBSExport.objection", b64data)
+  } catch (e) {
+    alert(e)
+  }
+}
+
+async function pullMessages() {
+  fetching.value = true
+  try {
+    const [first, last] = extractIdRange(idRange.value)
+    const room = (typeof roomId.value === "string") ? undefined : roomId.value
+    const resp = await api.request<{
+      message: Message[],
+      user: User[]
+    }>(new SearchRequests(
+      {
+        sole: first,
+        first: first - 1,
+        last: last + 1,
+        roomId: room || 0,
+      },
+      [
+        new SearchRequest(RequestType.message, "*", (first === last ? "id = @sole" : "id > @first AND id < @last") + (room ? " AND contentId = @roomId" : ""), "id"),
+        new SearchRequest(RequestType.user, "*", `id ${first === last ? "=" : "IN"} @message.createUserId`)
+      ]
+    ))
+    messages.value = resp.objects.message
+    users.value = resp.objects.user.map(u => new UserContainer(u))
+  } catch (e) {
+    console.error(e)
+  } finally {
+    fetching.value = false
+  }
+}
+
+function objectionLolIcon(id: number): string {
+  return `https://objection.lol/images/characters/${id}/icon.png`
+}
 </script>
 
 <template>
@@ -113,16 +165,13 @@ export default defineComponent({
         <div class="field">
           <label for="room-id" class="label">Room ID</label>
           <div class="control">
-            <input type="number" id="room-id" class="input"
-              placeholder="???" v-model.number="roomId">
+            <input type="number" id="room-id" class="input" placeholder="???" v-model.number="roomId">
           </div>
         </div>
         <div class="field">
           <label for="id-range" class="label">ID Range</label>
           <div class="control">
-            <input type="text" id="id-range" class="input"
-              placeholder="???-???" v-model="idRange"
-              required>
+            <input type="text" id="id-range" class="input" placeholder="???-???" v-model="idRange" required>
           </div>
         </div>
         <div class="field">
@@ -132,33 +181,32 @@ export default defineComponent({
         </div>
       </form>
       <template v-if="messages.length">
+        <button class="button is-success" @click="exportEntries">
+          Export Entries
+        </button>
         <h2 class="is-size-4">Users</h2>
-        <div class="box" v-for="user in users" :key="user.user.id"
-          :id="`user-${user.user.id}`">
+        <div class="box" v-for="user in users" :key="user.user.id" :id="`user-${user.user.id}`">
           <h3 class="is-size-5">{{ user.user.username }}</h3>
           <div class="field">
-            <label :for="`character-select-${user.user.id}`"
-              class="label">
+            <label :for="`character-select-${user.user.id}`" class="label">
               Character
             </label>
             <div class="select">
-              <select :id="`character-select-${user.user.id}`"
-                v-model="user.metadata.characterId">
+              <select :id="`character-select-${user.user.id}`" v-model="user.metadata.characterId">
                 <option v-for="c in characters" :value="c.id">
                   {{ c.name }}
                 </option>
               </select>
             </div>
             <figure class="image is-64x64">
-              <img :src="objectionLolIcon(user.metadata.characterId)" >
+              <img :src="objectionLolIcon(user.metadata.characterId)">
             </figure>
           </div>
           <div class="field">
             <label class="label" :for="`censored-name-${user.user.id}`">
               Censored Name
             </label>
-            <input type="text" class="input"
-              :id="`censored-name-${user.user.id}`"
+            <input type="text" class="input" :id="`censored-name-${user.user.id}`"
               v-model.lazy="user.metadata.censoredName">
           </div>
         </div>
@@ -176,8 +224,10 @@ export default defineComponent({
               <td>{{ msg.id }}</td>
               <td>
                 <a :href="`#user-${msg.createUserId}`">
-                  {{ user?.metadata.censoredName || user?.user.username
-                    || msg.createUserId }}
+                  {{
+                    user?.metadata.censoredName || user?.user.username
+                      || msg.createUserId
+                  }}
                 </a>
               </td>
               <td>{{ msg.text }}</td>
@@ -190,5 +240,5 @@ export default defineComponent({
 </template>
 
 <style>
-  @import "npm:bulma/css/bulma.min.css";
+@import "npm:bulma/css/bulma.min.css";
 </style>
