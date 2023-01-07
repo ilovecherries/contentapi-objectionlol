@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, defineComponent, ref } from 'vue'
-import { ContentAPI } from "contentapi-ts-bindings/dist/Helpers"
+import { computed, onMounted, ref } from 'vue'
+import { ContentAPI, ContentAPI_Session } from "contentapi-ts-bindings/dist/Helpers"
 import type { User, Message } from "contentapi-ts-bindings/dist/Views"
 import { RequestType } from "contentapi-ts-bindings/dist/Search/RequestType"
 import { SearchRequests, SearchRequest } from "contentapi-ts-bindings/dist/Search/SearchRequests"
@@ -46,6 +46,11 @@ const idRange = ref('')
 const messages = ref<Message[]>([])
 const users = ref<UserContainer[]>([])
 const fetching = ref(false)
+const session = ref<ContentAPI_Session|undefined>(undefined)
+const username = ref("")
+const password = ref("")
+const loggingIn = ref(false)
+const identity = ref<User|undefined>(undefined)
 
 const associatedMessages = computed<[Message, UserContainer | undefined][]>(() => {
   return messages.value.map(msg => {
@@ -128,10 +133,11 @@ async function pullMessages() {
   try {
     const [first, last] = extractIdRange(idRange.value)
     const room = (typeof roomId.value === "string") ? undefined : roomId.value
-    const resp = await api.request<{
+    type Return = {
       message: Message[],
       user: User[]
-    }>(new SearchRequests(
+    }
+    const req = new SearchRequests(
       {
         sole: first,
         first: first - 1,
@@ -142,7 +148,10 @@ async function pullMessages() {
         new SearchRequest(RequestType.message, "*", (first === last ? "id = @sole" : "id > @first AND id < @last") + (room ? " AND contentId = @roomId" : ""), "id"),
         new SearchRequest(RequestType.user, "*", `id ${first === last ? "=" : "IN"} @message.createUserId`)
       ]
-    ))
+    )
+    const resp = session.value ? 
+      await api.request<Return>(req, session.value.headers) :
+      await api.request<Return>(req)
     messages.value = resp.objects.message
     users.value = resp.objects.user.map(u => new UserContainer(u))
   } catch (e) {
@@ -151,6 +160,38 @@ async function pullMessages() {
     fetching.value = false
   }
 }
+
+async function refreshIndentity() {
+  identity.value = await session.value?.getUserInfo()
+}
+
+async function login() {
+  loggingIn.value = true
+  try {
+    const token = await api.login(username.value, password.value)
+    session.value = new ContentAPI_Session(api, token)
+    localStorage.setItem("token", token)
+    await refreshIndentity()
+  } catch (e) {
+    alert(e)
+  } finally {
+    loggingIn.value = false
+  }
+}
+
+function logout() {
+  session.value = undefined
+  identity.value = undefined
+  localStorage.removeItem("token")
+}
+
+onMounted(async () => {
+  const token = localStorage.getItem("token")
+  if (token !== null) {
+    session.value = new ContentAPI_Session(api, token)
+    await refreshIndentity()
+  }
+})
 
 function objectionLolIcon(id: number): string {
   return `https://objection.lol/images/characters/${id}/icon.png`
@@ -161,6 +202,35 @@ function objectionLolIcon(id: number): string {
   <section class="section">
     <div class="container">
       <h1 class="title">ContentAPI-Objection.lol Converter</h1>
+      <template v-if="session === undefined">
+        <h2 class="is-size-4">Login</h2>
+        <form @submit.prevent="login">
+          <div class="field">
+            <label for="username" class="label">Username</label>
+            <div class="control">
+              <input type="text" name="username" id="username" v-model="username"
+                class="input">
+            </div>
+          </div>
+          <div class="field">
+            <label for="password" class="label">Password</label>
+            <div class="control">
+              <input type="password" name="password" id="password" v-model="password"
+                class="input">
+            </div>
+          </div>
+          <div class="field">
+            <button class="button is-info" type="submit">Login</button>
+          </div>
+        </form>
+      </template>
+      <div v-else>
+        Logged in as {{ identity?.username }}
+        <div class="field">
+          <button class="button is-danger" @click="logout">Logout</button>
+        </div>
+      </div>
+      <h2 class="is-size-4">Query messages</h2>
       <form @submit.prevent="pullMessages">
         <div class="field">
           <label for="room-id" class="label">Room ID</label>
