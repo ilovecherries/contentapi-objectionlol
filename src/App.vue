@@ -164,7 +164,7 @@ async function pullMessages() {
     messages.value = resp.objects.message
     users.value = resp.objects.user.map(u => new UserContainer(u))
   } catch (e) {
-    console.error(e)
+    alert(e)
   } finally {
     fetching.value = false
   }
